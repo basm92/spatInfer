@@ -28,6 +28,18 @@
 #' [placebo()] and [synth()]. Duplicate coordinates are jittered by a small
 #' random amount before neighbour search.
 #'
+#' When `model$data` is available (i.e. the model was estimated with
+#' `data.save = TRUE`, as [basis_regression()] and [basis_regression_iv()] do
+#' automatically), the function refits the model via `lm()` and passes it to
+#' [spdep::lm.morantest()]. This uses the Cliff-Ord analytical distribution,
+#' which accounts for the regression projection (hat) matrix and gives
+#' theoretically correct p-values for regression residuals.
+#'
+#' When `model$data` is unavailable and coordinates are supplied via `df`,
+#' the function falls back to [spdep::moran.test()] on the raw residuals. The
+#' Moran I statistic is identical, but the p-value is slightly less accurate
+#' because the hat-matrix correction is not applied.
+#'
 #' For `modelsummary` integration, `moran_i` and `moran_p` are added
 #' automatically to the goodness-of-fit section when `spatInfer` is loaded and
 #' the model has spatial data (i.e. `model$data` contains `X` and `Y`). Control
@@ -89,25 +101,23 @@
 #' )
 moran_test <- function(model, df = NULL, near_neigh = 5) {
 
-  # Resolve coordinates -------------------------------------------------------
-  if (is.null(df)) {
-    df <- model$data
-    if (is.null(df))
-      stop(
-        "No coordinates found. Either supply `df` with X and Y columns, ",
-        "or re-estimate the model with `data.save = TRUE` (basis_regression ",
-        "and basis_regression_iv do this automatically)."
-      )
-  }
+  # Resolve data --------------------------------------------------------------
+  model_data <- model$data  # NULL when data.save = FALSE
 
-  if (!all(c("X", "Y") %in% names(df)))
+  # Coordinates: prefer user-supplied df, fall back to model$data
+  coord_df <- if (!is.null(df)) df else model_data
+  if (is.null(coord_df))
+    stop(
+      "No data found. Either supply `df` with X and Y columns, ",
+      "or re-estimate the model with `data.save = TRUE` (basis_regression ",
+      "and basis_regression_iv do this automatically)."
+    )
+
+  if (!all(c("X", "Y") %in% names(coord_df)))
     stop("The data frame must contain columns named X (longitude) and Y (latitude).")
 
-  # Residuals -----------------------------------------------------------------
-  resids <- residuals(model)
-
   # Spatial weights -----------------------------------------------------------
-  Coords <- as.matrix(df |> dplyr::select(X, Y))
+  Coords <- as.matrix(coord_df[, c("X", "Y")])
 
   if (anyDuplicated(Coords) > 0) {
     set.seed(123)
@@ -115,16 +125,32 @@ moran_test <- function(model, df = NULL, near_neigh = 5) {
   }
 
   nearest <- spdep::knn2nb(spdep::knearneigh(Coords, k = near_neigh, longlat = FALSE))
-  nearest <- spdep::nb2listw(nearest, style = "W")
+  listw   <- spdep::nb2listw(nearest, style = "W")
 
   # Moran test ----------------------------------------------------------------
-  result <- spdep::moran.test(resids, listw = nearest)
+  # Preferred path: refit as lm() and use lm.morantest() (Cliff-Ord).
+  # This accounts for the hat matrix and gives correct p-values for
+  # regression residuals, matching the internal moran() helper used by
+  # placebo() and synth().
+  if (!is.null(model_data)) {
+    fml    <- formula(model)
+    wts    <- model$weights   # numeric vector or NULL
+    lm_fit <- lm(fml, data = model_data, weights = wts)
+    result <- spdep::lm.morantest(lm_fit, listw = listw)
+    stat   <- result$statistic[1, 1]
+    pval   <- result$p.value
+  } else {
+    # Fallback when model$data is unavailable: moran.test() on raw residuals.
+    # The Moran I statistic is correct; the p-value is slightly less accurate
+    # (no hat-matrix correction).
+    resids <- residuals(model)
+    result <- spdep::moran.test(resids, listw = listw)
+    stat   <- unname(result$estimate["Moran I statistic"])
+    pval   <- result$p.value
+  }
 
   structure(
-    list(
-      statistic = unname(result$estimate["Moran I statistic"]),
-      p.value   = result$p.value
-    ),
+    list(statistic = stat, p.value = pval),
     class = "moran_test"
   )
 }
