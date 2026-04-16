@@ -101,49 +101,74 @@
 #' )
 moran_test <- function(model, df = NULL, near_neigh = 5) {
 
-  # Resolve data --------------------------------------------------------------
   model_data <- model$data  # NULL when data.save = FALSE
 
-  # Coordinates: prefer user-supplied df, fall back to model$data
-  coord_df <- if (!is.null(df)) df else model_data
-  if (is.null(coord_df))
-    stop(
-      "No data found. Either supply `df` with X and Y columns, ",
-      "or re-estimate the model with `data.save = TRUE` (basis_regression ",
-      "and basis_regression_iv do this automatically)."
-    )
-
-  if (!all(c("X", "Y") %in% names(coord_df)))
-    stop("The data frame must contain columns named X (longitude) and Y (latitude).")
-
-  # Spatial weights -----------------------------------------------------------
-  Coords <- as.matrix(coord_df[, c("X", "Y")])
-
-  if (anyDuplicated(Coords) > 0) {
-    set.seed(123)
-    Coords <- Coords + matrix(rnorm(2 * nrow(Coords), 0, 0.01), ncol = 2)
-  }
-
-  nearest <- spdep::knn2nb(spdep::knearneigh(Coords, k = near_neigh, longlat = FALSE))
-  listw   <- spdep::nb2listw(nearest, style = "W")
-
-  # Moran test ----------------------------------------------------------------
-  # Preferred path: refit as lm() and use lm.morantest() (Cliff-Ord).
-  # This accounts for the hat matrix and gives correct p-values for
-  # regression residuals, matching the internal moran() helper used by
-  # placebo() and synth().
+  # ── Preferred path: refit as lm() + lm.morantest() (Cliff-Ord) ─────────────
+  # Accounts for the hat matrix; gives theoretically correct p-values for
+  # regression residuals.  Available whenever model$data was saved.
   if (!is.null(model_data)) {
-    fml    <- formula(model)
-    wts    <- model$weights   # numeric vector or NULL
-    lm_fit <- lm(fml, data = model_data, weights = wts)
+    fml      <- formula(model)
+    wts      <- model$weights   # numeric vector or NULL
+    fml_vars <- all.vars(fml)
+
+    # Subset model_data to complete cases for the formula variables *before*
+    # calling lm().  This ensures lm_fit has no na.action, so lm.morantest()
+    # does not internally re-subset the weights matrix (which would cause
+    # "subsetting caused increase in subgraph count" for datasets where the
+    # response has NAs, as is the case when feols saves the full input data
+    # via data.save = TRUE).
+    keep     <- stats::complete.cases(model_data[, intersect(fml_vars, names(model_data)), drop = FALSE])
+    lm_data  <- model_data[keep, , drop = FALSE]
+    lm_wts   <- if (!is.null(wts)) wts[keep] else NULL
+    # do.call passes all arguments by value, sidestepping NSE symbol lookup
+    # against the formula's attached environment.
+    lm_fit   <- do.call("lm", list(formula = fml, data = lm_data, weights = lm_wts))
+
+    # Coordinates: prefer user-supplied df; fall back to model$data.
+    # Use the same row subset (keep) so the weights matrix aligns with lm_fit.
+    coord_src <- if (!is.null(df)) df else model_data
+    if (!all(c("X", "Y") %in% names(coord_src)))
+      stop("The data frame must contain columns named X (longitude) and Y (latitude).")
+
+    Coords <- as.matrix(coord_src[keep, c("X", "Y")])
+
+    if (anyDuplicated(Coords) > 0) {
+      set.seed(123)
+      Coords <- Coords + matrix(stats::rnorm(2L * nrow(Coords), 0, 0.01), ncol = 2L)
+    }
+
+    nearest <- spdep::knn2nb(spdep::knearneigh(Coords, k = near_neigh, longlat = FALSE))
+    listw   <- spdep::nb2listw(nearest, style = "W")
+
     result <- spdep::lm.morantest(lm_fit, listw = listw)
     stat   <- result$statistic[1, 1]
     pval   <- result$p.value
+
+  # ── Fallback: moran.test() on raw residuals ──────────────────────────────────
+  # Moran I statistic is identical; p-value is slightly less accurate (no
+  # hat-matrix correction).  Used when model$data is unavailable.
   } else {
-    # Fallback when model$data is unavailable: moran.test() on raw residuals.
-    # The Moran I statistic is correct; the p-value is slightly less accurate
-    # (no hat-matrix correction).
-    resids <- residuals(model)
+    coord_df <- if (!is.null(df)) df else
+      stop(
+        "No data found. Either supply `df` with X and Y columns, ",
+        "or re-estimate the model with `data.save = TRUE` (basis_regression ",
+        "and basis_regression_iv do this automatically)."
+      )
+
+    if (!all(c("X", "Y") %in% names(coord_df)))
+      stop("The data frame must contain columns named X (longitude) and Y (latitude).")
+
+    Coords <- as.matrix(coord_df[, c("X", "Y")])
+
+    if (anyDuplicated(Coords) > 0) {
+      set.seed(123)
+      Coords <- Coords + matrix(stats::rnorm(2L * nrow(Coords), 0, 0.01), ncol = 2L)
+    }
+
+    nearest <- spdep::knn2nb(spdep::knearneigh(Coords, k = near_neigh, longlat = FALSE))
+    listw   <- spdep::nb2listw(nearest, style = "W")
+
+    resids <- stats::residuals(model)
     result <- spdep::moran.test(resids, listw = listw)
     stat   <- unname(result$estimate["Moran I statistic"])
     pval   <- result$p.value
