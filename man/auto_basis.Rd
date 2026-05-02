@@ -11,6 +11,7 @@ auto_basis(
   nSim = 1000,
   weights = FALSE,
   max_clus = 6,
+  max_pc = 6,
   Parallel = TRUE,
   exact_cholesky = TRUE,
   k_medoids = TRUE,
@@ -39,6 +40,11 @@ weighting variable must be named \code{wts} in \code{df} for
 
 \item{max_clus}{Maximum number of clusters to examine in the placebo test.
 Defaults to 6.}
+
+\item{max_pc}{Maximum number of principal components to consider when
+searching for the BIC-optimal basis. Defaults to 6. Increase if you
+suspect the spatial trend requires more components; decrease to keep the
+regression parsimonious.}
 
 \item{Parallel}{Run simulations in parallel. Set to \code{FALSE} if there are
 memory problems.}

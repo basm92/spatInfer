@@ -39,6 +39,10 @@
 #'   PAM for medoid computation.
 #' @param jitter_coords If some sites share identical coordinates, jitter by
 #'   Gaussian noise (sd = 0.01) so the Moran test can be computed.
+#' @param max_pc Maximum number of principal components to consider when
+#'   searching for the BIC-optimal basis. Defaults to 6. Increase if you
+#'   suspect the spatial trend requires more components; decrease to keep the
+#'   regression parsimonious.
 #' @param cov Covariance estimator passed to [basis_regression()]. Defaults
 #'   to `"BCH"`.
 #' @param verbose If `TRUE` (default), prints the chosen splines, PC count, and
@@ -79,8 +83,8 @@
 #'   coef_omit = "Intercept|PC", fmt = 2)
 
 auto_basis <- function(fm, df, max_splines = 8, nSim = 1000,
-                       weights = FALSE, max_clus = 6, Parallel = TRUE,
-                       exact_cholesky = TRUE, k_medoids = TRUE,
+                       weights = FALSE, max_clus = 6, max_pc = 6,
+                       Parallel = TRUE, exact_cholesky = TRUE, k_medoids = TRUE,
                        jitter_coords = TRUE, cov = "BCH", verbose = TRUE) {
 
   if (is.null(df$X) | is.null(df$Y))
@@ -110,7 +114,7 @@ auto_basis <- function(fm, df, max_splines = 8, nSim = 1000,
     pc_df  <- cbind.data.frame(dep_var = df_tmp$dep_var, pc_all$x)
     n_pc   <- ncol(pc_df) - 1L
 
-    for (j in seq_len(n_pc)) {
+    for (j in seq_len(min(n_pc, max_pc))) {
       ll <- lm(dep_var ~ ., pc_df[, 1:(j + 1L)])
       bic_rows[[idx]] <- data.frame(BIC = BIC(ll), spline = spl, pc = j)
       idx <- idx + 1L
