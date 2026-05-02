@@ -39,6 +39,18 @@ observation (row-standardised), matching the approach used internally by
 \code{\link[=placebo]{placebo()}} and \code{\link[=synth]{synth()}}. Duplicate coordinates are jittered by a small
 random amount before neighbour search.
 
+When \code{model$data} is available (i.e. the model was estimated with
+\code{data.save = TRUE}, as \code{\link[=basis_regression]{basis_regression()}} and \code{\link[=basis_regression_iv]{basis_regression_iv()}} do
+automatically), the function refits the model via \code{lm()} and passes it to
+\code{\link[spdep:lm.morantest]{spdep::lm.morantest()}}. This uses the Cliff-Ord analytical distribution,
+which accounts for the regression projection (hat) matrix and gives
+theoretically correct p-values for regression residuals.
+
+When \code{model$data} is unavailable and coordinates are supplied via \code{df},
+the function falls back to \code{\link[spdep:moran.test]{spdep::moran.test()}} on the raw residuals. The
+Moran I statistic is identical, but the p-value is slightly less accurate
+because the hat-matrix correction is not applied.
+
 For \code{modelsummary} integration, \code{moran_i} and \code{moran_p} are added
 automatically to the goodness-of-fit section when \code{spatInfer} is loaded and
 the model has spatial data (i.e. \code{model$data} contains \code{X} and \code{Y}). Control
